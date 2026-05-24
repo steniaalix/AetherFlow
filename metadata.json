@@ -1,0 +1,6 @@
+{
+  "name": "AuraFlow",
+  "description": "AI-Powered Workflow Automation Studio featuring an interactive canvas, prompt-based flow generation, customizable node integrations, and customizable database configurations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,12 +1,13 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo, useCallback, lazy, Suspense } from "react";
 import { Workflow, WorkflowNode, WorkflowConnection, ExecutionLog, UserSession } from "./types";
 import { AuraDatabase } from "./lib/supabase";
 import FlowCanvas from "./components/FlowCanvas";
 import NodeConfigPanel from "./components/NodeConfigPanel";
 import AIPromptBuilder from "./components/AIPromptBuilder";
 import ExecutionLogViewer from "./components/ExecutionLogViewer";
-import SupabaseConfigModal from "./components/SupabaseConfigModal";
 import ConsoleOutputPanel from "./components/ConsoleOutputPanel";
+
+const SupabaseConfigModal = lazy(() => import("./components/SupabaseConfigModal"));
 
 import {
   Workflow as WorkflowIcon,
@@ -29,7 +30,8 @@ import {
   MessageSquare,
   X,
   Send,
-  Loader2
+  Loader2,
+  Menu
 } from "lucide-react";
 
 export default function App() {
@@ -49,6 +51,7 @@ export default function App() {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [activeWorkflow, setActiveWorkflow] = useState<Workflow | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [showSidebar, setShowSidebar] = useState(true);
 
   // Execution logs state
   const [logs, setLogs] = useState<ExecutionLog[]>([]);
@@ -212,7 +215,7 @@ export default function App() {
       updatedAt: new Date().toISOString(),
     };
 
-    setWorkflows([newWf, ...workflows]);
+    setWorkflows((prev) => [newWf, ...prev]);
     setActiveWorkflow(newWf);
     setSelectedNodeId(null);
     showBanner("success", "Spawned an empty design automation canvas.");
@@ -223,8 +226,7 @@ export default function App() {
     try {
       const saved = await AuraDatabase.saveWorkflow(activeWorkflow);
       // Update cached lists
-      const filtered = workflows.filter((w) => w.id !== activeWorkflow.id);
-      setWorkflows([saved, ...filtered]);
+      setWorkflows((prev) => [saved, ...prev.filter((w) => w.id !== activeWorkflow.id)]);
       setActiveWorkflow(saved);
       showBanner("success", `Pipeline "${saved.name}" stored to database.`);
     } catch (err: any) {
@@ -248,45 +250,42 @@ export default function App() {
     }
   };
 
-  const handleUpdateActiveNodes = (newNodes: WorkflowNode[]) => {
-    if (activeWorkflow) {
-      setActiveWorkflow({ ...activeWorkflow, nodes: newNodes });
-    }
-  };
+  const handleUpdateActiveNodes = useCallback((newNodes: WorkflowNode[]) => {
+    setActiveWorkflow((current) => current ? { ...current, nodes: newNodes } : current);
+  }, []);
 
-  const handleUpdateActiveConnections = (newConns: WorkflowConnection[]) => {
-    if (activeWorkflow) {
-      setActiveWorkflow({ ...activeWorkflow, connections: newConns });
-    }
-  };
+  const handleUpdateActiveConnections = useCallback((newConns: WorkflowConnection[]) => {
+    setActiveWorkflow((current) => current ? { ...current, connections: newConns } : current);
+  }, []);
 
-  const handleSelectNode = (nodeId: string | null) => {
+  const handleSelectNode = useCallback((nodeId: string | null) => {
     setSelectedNodeId(nodeId);
-  };
+  }, []);
 
   // Handle single Node updates from side settings panel
   const handleUpdateNodeConfig = (nodeId: string, updatedConfig: Record<string, any>, updatedName: string) => {
     if (!activeWorkflow) return;
-    const mapped = activeWorkflow.nodes.map((n) => {
-      if (n.id === nodeId) {
-        return { ...n, config: updatedConfig, name: updatedName };
-      }
-      return n;
+    setActiveWorkflow((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        nodes: current.nodes.map((n) =>
+          n.id === nodeId ? { ...n, config: updatedConfig, name: updatedName } : n
+        ),
+      };
     });
-    setActiveWorkflow({ ...activeWorkflow, nodes: mapped });
   };
 
   // Node deletion from settings panel
   const handleDeleteNode = (nodeId: string) => {
     if (!activeWorkflow) return;
-    const nodesFiltered = activeWorkflow.nodes.filter((n) => n.id !== nodeId);
-    // filter connected wires pointing or routing from/to this node
-    const connsFiltered = activeWorkflow.connections.filter((c) => c.fromNodeId !== nodeId && c.toNodeId !== nodeId);
-
-    setActiveWorkflow({
-      ...activeWorkflow,
-      nodes: nodesFiltered,
-      connections: connsFiltered,
+    setActiveWorkflow((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        nodes: current.nodes.filter((n) => n.id !== nodeId),
+        connections: current.connections.filter((c) => c.fromNodeId !== nodeId && c.toNodeId !== nodeId),
+      };
     });
     setSelectedNodeId(null);
     showBanner("success", "Deleted node block and related wires.");
@@ -294,7 +293,7 @@ export default function App() {
 
   // 4. Copilot Generation Integration Hook
   const handleAIGeneratedWorkflow = (wf: Workflow) => {
-    setWorkflows([wf, ...workflows]);
+    setWorkflows((prev) => [wf, ...prev]);
     setActiveWorkflow(wf);
     setSelectedNodeId(null);
     showBanner("success", `AI successfully drafted pipeline: "${wf.name}"`);
@@ -346,6 +345,16 @@ export default function App() {
       // Track global evaluation variables across pipes (to forward output data as parameters to downstream inputs)
       // Stores node inputs indexed by nodeId => payloadData
       const runContext: Record<string, any> = {};
+      const nodeById = new Map<string, WorkflowNode>(activeWorkflow.nodes.map((node) => [node.id, node]));
+      const outgoingByNode = activeWorkflow.connections.reduce((map, conn) => {
+        const outgoing = map.get(conn.fromNodeId);
+        if (outgoing) {
+          outgoing.push(conn);
+        } else {
+          map.set(conn.fromNodeId, [conn]);
+        }
+        return map;
+      }, new Map<string, WorkflowConnection[]>());
 
       // Seed trigger configurations
       for (const tn of triggerNodes) {
@@ -365,16 +374,17 @@ export default function App() {
         nodeId: n.id,
         incomingData: runContext[n.id],
       }));
+      let queueIndex = 0;
 
       // Prevent infinite cycles on grid loops
       const processedSet = new Set<string>();
 
-      while (queue.length > 0) {
-        const { nodeId, incomingData } = queue.shift()!;
+      while (queueIndex < queue.length) {
+        const { nodeId, incomingData } = queue[queueIndex++];
         if (processedSet.has(nodeId)) continue;
         processedSet.add(nodeId);
 
-        const currentNode = activeWorkflow.nodes.find((n) => n.id === nodeId);
+        const currentNode = nodeById.get(nodeId);
         if (!currentNode) continue;
 
         // Highlight active executing block physically on the grid canvas
@@ -438,7 +448,7 @@ export default function App() {
         }
 
         // Evaluate next routing targets based on connection wires
-        const outgoingConnections = activeWorkflow.connections.filter((c) => c.fromNodeId === nodeId);
+        const outgoingConnections = outgoingByNode.get(nodeId) || [];
 
         for (const conn of outgoingConnections) {
           // Rule: If filter conditional node, YES follows 'output' wires, NO follows 'fail' wires
@@ -484,7 +494,10 @@ export default function App() {
     showBanner("success", "Cleared execution statistics history.");
   };
 
-  const activeNode = activeWorkflow?.nodes.find((n) => n.id === selectedNodeId) || null;
+  const activeNode = useMemo(
+    () => activeWorkflow?.nodes.find((n) => n.id === selectedNodeId) || null,
+    [activeWorkflow?.nodes, selectedNodeId]
+  );
 
   return (
     <div className="min-h-screen bg-[#050505] text-slate-200 flex flex-col font-sans select-none antialiased">
@@ -497,7 +510,6 @@ export default function App() {
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-sm font-bold tracking-tight text-white">AetherFlow Studio</h1>
-              <span className="px-2 py-0.5 bg-cyan-500/20 text-cyan-400 border border-cyan-500/10 rounded text-[9px] font-bold uppercase tracking-wider">Active</span>
             </div>
             <p className="text-[10px] text-slate-400">Low-code workflow automation orchestrator & API router</p>
           </div>
@@ -569,9 +581,13 @@ export default function App() {
       )}
 
       {/* 2. MAIN WORKSPACE GRID DIVISION */}
-      <main className="flex-1 flex flex-col lg:flex-row overflow-hidden">
+      <main className="flex-1 flex flex-col lg:flex-row overflow-hidden relative">
         {/* Left Side: Pipeline List, Copilot, & Log View panel */}
-        <div className="w-full lg:w-96 border-r border-white/10 p-5 space-y-5 flex flex-col h-full overflow-y-auto shrink-0 bg-black/40 backdrop-blur-xl">
+        <div
+          className={`w-full lg:w-96 border-r border-white/10 p-5 gap-5 flex-col h-full overflow-y-auto shrink-0 bg-black/40 backdrop-blur-xl ${
+            showSidebar ? "flex" : "hidden"
+          }`}
+        >
           {/* Active Workflows collection selections */}
           <div className="bg-white/5 backdrop-blur-xl border border-white/10 p-4 rounded-xl space-y-4 shadow-xl">
             <div className="flex items-center justify-between">
@@ -586,6 +602,15 @@ export default function App() {
               >
                 <Plus className="w-3.5 h-3.5" />
                 New
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowSidebar(false)}
+                title="Hide sidebar"
+                aria-label="Hide sidebar"
+                className="h-7 w-7 bg-black/45 hover:bg-black border border-white/15 hover:border-cyan-400/50 text-slate-300 hover:text-cyan-300 rounded-md flex items-center justify-center transition-all cursor-pointer"
+              >
+                <Menu className="w-3.5 h-3.5" />
               </button>
             </div>
 
@@ -629,7 +654,7 @@ export default function App() {
 
           {/* PUBLIC ACCESS / SIMULATION STATE AUTHENTICATION TRIGGER BOX */}
           {!session.isAuthenticated && (
-            <div id="auth-panel" className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-xl overflow-hidden shadow-xl p-4.5 space-y-4">
+            <div id="auth-panel" className="order-first bg-white/5 backdrop-blur-xl border border-white/10 rounded-xl overflow-hidden shadow-xl p-4.5 space-y-4">
               <div className="flex items-center justify-between border-b border-white/10 pb-2">
                 <span className="text-xs font-bold text-slate-300 uppercase tracking-wider">🔐 Setup Sync Account</span>
                 <div className="flex gap-2">
@@ -695,13 +720,27 @@ export default function App() {
           {activeWorkflow ? (
             <div className={`flex-1 flex flex-col overflow-hidden h-full relative ${isRunningSim ? "pulse-rgb-flow" : ""}`}>
               {/* Controls bar over canvas wrapper */}
-              <div className="px-6 py-4 bg-black/20 backdrop-blur-md border-b border-white/10 flex flex-col sm:flex-row items-center justify-between gap-4 shrink-0">
-                <div className="text-left">
-                  <div className="text-xs text-slate-500 uppercase tracking-widest font-bold">Currently Designing</div>
-                  <h2 className="text-sm font-bold text-slate-200">{activeWorkflow.name}</h2>
+              <div className="px-6 py-4 bg-black/20 backdrop-blur-md border-b border-white/10 grid grid-cols-1 xl:grid-cols-[minmax(2.25rem,1fr)_minmax(10rem,26rem)_minmax(24rem,1fr)] items-center gap-4 shrink-0">
+                <div className="flex items-center justify-start min-w-0">
+                  {!showSidebar && (
+                    <button
+                      type="button"
+                      onClick={() => setShowSidebar(true)}
+                      title="Show sidebar"
+                      aria-label="Show sidebar"
+                      className="h-9 w-9 bg-black/55 hover:bg-black border border-white/15 hover:border-cyan-400/50 text-slate-300 hover:text-cyan-300 rounded-lg shadow-lg backdrop-blur-xl flex items-center justify-center transition-all cursor-pointer shrink-0"
+                    >
+                      <Menu className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
 
-                <div className="flex items-center gap-3">
+                <div className="text-center min-w-0">
+                  <div className="text-xs text-slate-500 uppercase tracking-widest font-bold">Currently Designing</div>
+                  <h2 className="text-sm font-bold text-slate-200 truncate">{activeWorkflow.name}</h2>
+                </div>
+
+                <div className="flex items-center justify-center xl:justify-end gap-3 min-w-0 flex-wrap">
                   <button
                     onClick={handleDeleteWorkflow}
                     className="px-3.5 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 text-rose-400 hover:text-rose-300 rounded-lg text-[10px] font-semibold transition-colors flex items-center gap-1.5 cursor-pointer"
@@ -782,7 +821,11 @@ export default function App() {
       </main>
 
       {/* 3. SUPABASE SECURE DATABASE PREPARATION MODAL PANEL */}
-      <SupabaseConfigModal isOpen={showConfig} onClose={() => setShowConfig(false)} />
+      {showConfig && (
+        <Suspense fallback={null}>
+          <SupabaseConfigModal isOpen={showConfig} onClose={() => setShowConfig(false)} />
+        </Suspense>
+      )}
 
       {/* 4. HIGH FIDELITY PIPELINE SIMULATION COMPLETION INSPECTOR OVERLAY */}
       {completedLogModal && (

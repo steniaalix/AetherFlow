@@ -61,6 +61,10 @@ export default function ConsoleOutputPanel({ logs, activeLog, isRunning }: Props
         msg = `Pushed active JSON channel broadcast embed. Result content: "${step.output?.sentMessage || "Success payload"}"`;
       } else if (step.nodeType === "webhook") {
         msg = `Payload received through hook channel path "${step.output?.path || "/leads-ingress"}"`;
+      } else if (step.nodeType === "telegram") {
+        msg = `Telegram message received from ${step.output?.from || step.output?.chatId || "demo chat"}: "${step.output?.message || "Start workflow"}"`;
+      } else if (step.nodeType === "whatsapp") {
+        msg = `WhatsApp message received from ${step.output?.from || "demo contact"}: "${step.output?.message || "Start workflow"}"`;
       } else if (step.nodeType === "filter") {
         const cond = step.output?.meetsCondition;
         msg = `Conditional comparison criteria. Routed pathway: ${cond ? "🟢 YES branch" : "🔴 NO branch"} (Result key was: ${JSON.stringify(cond)})`;

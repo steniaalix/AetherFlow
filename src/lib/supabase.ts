@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
-import { Workflow, ExecutionLog, UserSession } from "../types";
+import { Workflow, ExecutionLog, UserSession, AccountRole } from "../types";
 
 // Helper keys for LocalStorage override settings
 const STORAGE_KEYS = {
@@ -9,6 +9,25 @@ const STORAGE_KEYS = {
   LOCAL_LOGS: "auraflow_logs",
   USER: "auraflow_user",
 };
+
+function normalizeAccountRole(role: unknown): AccountRole {
+  return role === "worker" || role === "team" ? "worker" : "customer";
+}
+
+async function persistUserProfile(user: any, accountRole: AccountRole) {
+  if (!supabaseClient || !user?.id) return;
+
+  try {
+    await supabaseClient.from("profiles").upsert({
+      id: user.id,
+      email: user.email || null,
+      account_role: accountRole,
+      updated_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.warn("Profile role sync skipped. Confirm the Supabase schema has the account_role column and insert/update policies.", err);
+  }
+}
 
 // 1. Determine active configurations
 export function getSupabaseConfig() {
@@ -57,6 +76,7 @@ export const SUPABASE_SQL_SCHEMA = `-- AuraFlow Workflow Automation Database Sch
 create table public.profiles (
   id uuid references auth.users on delete cascade primary key,
   email text,
+  account_role text not null default 'customer' check (account_role in ('worker', 'customer')),
   updated_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
@@ -65,6 +85,9 @@ alter table public.profiles enable row level security;
 
 create policy "Users can view own profile" on public.profiles
   for select using (auth.uid() = id);
+
+create policy "Users can insert own profile" on public.profiles
+  for insert with check (auth.uid() = id);
 
 create policy "Users can update own profile" on public.profiles
   for update using (auth.uid() = id);
@@ -239,31 +262,53 @@ export const AuraDatabase = {
   },
 
   // --- Authentication Handlers ---
-  async signUp(email: string, pass: string): Promise<{ success: boolean; user?: any; error?: string }> {
+  async signUp(email: string, pass: string, accountRole: AccountRole): Promise<{ success: boolean; user?: any; session?: UserSession; error?: string }> {
     const config = getSupabaseConfig();
     if (supabaseClient && config.isConfigured) {
-      const { data, error } = await supabaseClient.auth.signUp({ email, password: pass });
+      const { data, error } = await supabaseClient.auth.signUp({
+        email,
+        password: pass,
+        options: {
+          data: { accountRole },
+        },
+      });
       if (error) return { success: false, error: error.message };
-      return { success: true, user: data.user };
+      await persistUserProfile(data.user, accountRole);
+      return {
+        success: true,
+        user: data.user,
+        session: { email, id: data.user?.id || "pending-user-account", isAuthenticated: true, accountRole },
+      };
     } else {
       // Local Auth Simulate
-      const session: UserSession = { email, id: "local-user-id", isAuthenticated: true };
+      const session: UserSession = { email, id: `local-${accountRole}-id`, isAuthenticated: true, accountRole };
       localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(session));
-      return { success: true, user: session };
+      return { success: true, user: session, session };
     }
   },
 
-  async signIn(email: string, pass: string): Promise<{ success: boolean; user?: any; error?: string }> {
+  async signIn(email: string, pass: string, accountRole: AccountRole): Promise<{ success: boolean; user?: any; session?: UserSession; error?: string }> {
     const config = getSupabaseConfig();
     if (supabaseClient && config.isConfigured) {
       const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password: pass });
       if (error) return { success: false, error: error.message };
-      return { success: true, user: data.user };
+      const resolvedRole = normalizeAccountRole(data.user?.user_metadata?.accountRole || accountRole);
+      await persistUserProfile(data.user, resolvedRole);
+      return {
+        success: true,
+        user: data.user,
+        session: {
+          email: data.user?.email || email,
+          id: data.user?.id || "active-user-account",
+          isAuthenticated: true,
+          accountRole: resolvedRole,
+        },
+      };
     } else {
       // Local Auth Simulate
-      const session: UserSession = { email, id: "local-user-id", isAuthenticated: true };
+      const session: UserSession = { email, id: `local-${accountRole}-id`, isAuthenticated: true, accountRole };
       localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(session));
-      return { success: true, user: session };
+      return { success: true, user: session, session };
     }
   },
 
@@ -284,6 +329,7 @@ export const AuraDatabase = {
           email: session.user.email || null,
           id: session.user.id,
           isAuthenticated: true,
+          accountRole: normalizeAccountRole(session.user.user_metadata?.accountRole),
         };
       }
     }
@@ -291,12 +337,16 @@ export const AuraDatabase = {
     const local = localStorage.getItem(STORAGE_KEYS.USER);
     if (local) {
       try {
-        return JSON.parse(local);
+        const parsed = JSON.parse(local);
+        return {
+          ...parsed,
+          accountRole: normalizeAccountRole(parsed.accountRole),
+        };
       } catch {
         // Fallback
       }
     }
-    return { email: null, id: null, isAuthenticated: false };
+    return { email: null, id: null, isAuthenticated: false, accountRole: "customer" };
   },
 
   // --- Workflow Handlers ---

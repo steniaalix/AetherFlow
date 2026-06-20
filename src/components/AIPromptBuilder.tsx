@@ -1,28 +1,10 @@
 import React, { useState } from "react";
-import { Sparkles, Terminal, ArrowRight, Lightbulb, RefreshCw } from "lucide-react";
+import { Sparkles, ArrowRight, RefreshCw } from "lucide-react";
 import { Workflow } from "../types";
 
 interface Props {
   onGenerate: (wf: Workflow) => void;
 }
-
-const PRESET_IDEAS = [
-  {
-    title: "Slack Weather Bot",
-    desc: "Fetch temperature details, summarize with AI, and alert Slack.",
-    prompt: "A daily morning trigger that fetches weather data from open-meteo, uses Gemini to summarize it concisely, and posts a lovely morning forecast to my #general Slack channel.",
-  },
-  {
-    title: "Lead Qualifying Funnel",
-    desc: "Test webhook budget inputs and email matching hot leads.",
-    prompt: "An inbound webhook receiver that processes hot leads. Use a filter rule to test if the lead budget is greater than 5000. If yes, send an email to high-value-sales@corp.com telling them to immediately close. If no, log it to Discord.",
-  },
-  {
-    title: "GitHub Commit Transceiver",
-    desc: "Check github commits and log to Discord.",
-    prompt: "A schedule trigger that polls my newest GitHub edits hourly, does Gemini sentiment review on changes, and posts formatted release logs into a Discord webhook channel.",
-  },
-];
 
 export default function AIPromptBuilder({ onGenerate }: Props) {
   const [prompt, setPrompt] = useState("");
@@ -103,11 +85,7 @@ export default function AIPromptBuilder({ onGenerate }: Props) {
             </div>
           )}
 
-          <div className="flex items-center justify-between gap-4">
-            <div className="text-[10px] text-slate-500 flex items-center gap-1">
-              <Terminal className="w-3.5 h-3.5" />
-              <span>Prompt prompts the AI to map layout, configure nodes, and link outputs automatically.</span>
-            </div>
+          <div className="flex items-center justify-end gap-4">
             <button
               type="submit"
               disabled={loading || !prompt.trim()}
@@ -127,33 +105,6 @@ export default function AIPromptBuilder({ onGenerate }: Props) {
             </button>
           </div>
         </form>
-
-        {/* Suggestion presets */}
-        <div className="space-y-2">
-          <div className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-            <Lightbulb className="w-3.5 h-3.5 text-amber-400" />
-            <span>Select a Preset Automation Concept</span>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {PRESET_IDEAS.map((item, idx) => (
-              <button
-                key={idx}
-                type="button"
-                onClick={() => setPrompt(item.prompt)}
-                disabled={loading}
-                className="p-3 text-left bg-white/5 hover:bg-white/10 border border-white/5 hover:border-white/10 rounded-lg transition-all duration-200 cursor-pointer text-xs group backdrop-blur-sm"
-              >
-                <div className="font-semibold text-slate-200 group-hover:text-cyan-400 transition-colors">
-                  {item.title}
-                </div>
-                <div className="text-[10px] text-slate-500 leading-relaxed mt-1">
-                  {item.desc}
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
       </div>
     </div>
   );

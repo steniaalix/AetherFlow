@@ -1,6 +1,6 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { WorkflowNode, WorkflowConnection, NodeType } from "../types";
-import { PlusCircle, HelpCircle, AlertCircle, Play, User, Network, FileDown, Activity, Settings, Zap, Trash2 } from "lucide-react";
+import { PlusCircle, Play, Zap, Trash2 } from "lucide-react";
 
 interface Props {
   nodes: WorkflowNode[];
@@ -29,7 +29,7 @@ const AVAILABLE_NODE_PRESETS: Array<{ type: NodeType; label: string; desc: strin
   { type: "http", label: "HTTP REST API Fetch", desc: "Executes GET/POST payloads", category: "action" },
 ];
 
-export default function FlowCanvas({
+function FlowCanvas({
   nodes,
   connections,
   selectedNodeId,
@@ -52,6 +52,8 @@ export default function FlowCanvas({
   // Quick preset drawer state
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [addMenuPos, setAddMenuPos] = useState({ x: 200, y: 150 });
+
+  const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
 
   // Listen for delete/backspace keypresses to delete selected node
   useEffect(() => {
@@ -81,8 +83,8 @@ export default function FlowCanvas({
   // 1. Coordinates calculations for drawing wires between Ports
   // Output Port corresponds to Right of Node
   // Input Port corresponds to Left of Node
-  const getNodePortCoords = (nodeId: string, portType: "input" | "output" | "true" | "false" | "fail") => {
-    const node = nodes.find((n) => n.id === nodeId);
+  const getNodePortCoords = useCallback((nodeId: string, portType: "input" | "output" | "true" | "false" | "fail") => {
+    const node = nodeById.get(nodeId);
     if (!node) return { x: 0, y: 0 };
 
     const nodeWidth = 200;
@@ -104,13 +106,29 @@ export default function FlowCanvas({
     }
 
     return { x: node.x + nodeWidth / 2, y: node.y + nodeHeight / 2 };
-  };
+  }, [nodeById]);
 
   // Convert node inputs into smooth SVG curve vectors
-  const makeBezierPath = (x1: number, y1: number, x2: number, y2: number) => {
+  const makeBezierPath = useCallback((x1: number, y1: number, x2: number, y2: number) => {
     const controlOffset = Math.max(80, Math.abs(x2 - x1) * 0.5);
     return `M ${x1} ${y1} C ${x1 + controlOffset} ${y1}, ${x2 - controlOffset} ${y2}, ${x2} ${y2}`;
-  };
+  }, []);
+
+  const connectionPaths = useMemo(
+    () =>
+      connections.map((conn) => {
+        const isFilterFalse = conn.fromPort === "fail";
+        const fromCoords = getNodePortCoords(conn.fromNodeId, isFilterFalse ? "false" : "true");
+        const toCoords = getNodePortCoords(conn.toNodeId, "input");
+
+        return {
+          conn,
+          isFilterFalse,
+          dStr: makeBezierPath(fromCoords.x, fromCoords.y, toCoords.x, toCoords.y),
+        };
+      }),
+    [connections, getNodePortCoords, makeBezierPath]
+  );
 
   // 2. Drag-and-Drop client hooks
   const handleNodeMouseDown = (e: React.MouseEvent, nodeId: string) => {
@@ -119,7 +137,7 @@ export default function FlowCanvas({
     // Select clicked node
     onSelectNode(nodeId);
     
-    const node = nodes.find((n) => n.id === nodeId);
+    const node = nodeById.get(nodeId);
     if (node) {
       setDraggingNodeId(nodeId);
       // Determine drag initial offset coordinates
@@ -265,8 +283,8 @@ export default function FlowCanvas({
   return (
     <div className="flex flex-col flex-1 h-full select-none overflow-hidden relative">
       {/* Canvas Tool Belt Action Row */}
-      <div className="p-3 bg-black/25 border-b border-white/10 flex items-center justify-between">
-        <div className="flex items-center gap-3">
+      <div className="p-3 bg-black/25 border-b border-white/10 flex items-center justify-end">
+        <div className="hidden">
           <span className="text-[11px] font-semibold text-slate-400 flex items-center gap-1.5 uppercase tracking-wider">
             <Zap className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
             Workspace Node Grid
@@ -310,12 +328,7 @@ export default function FlowCanvas({
       >
         {/* SVG Drawing Overlay for wires connections */}
         <svg className="absolute inset-0 w-full h-full pointer-events-none z-10" style={{ minWidth: "2000px", minHeight: "1200px" }}>
-          {connections.map((conn, idx) => {
-            const isFilterFalse = conn.fromPort === "fail";
-            const fromCoords = getNodePortCoords(conn.fromNodeId, isFilterFalse ? "false" : "true");
-            const toCoords = getNodePortCoords(conn.toNodeId, "input");
-            const dStr = makeBezierPath(fromCoords.x, fromCoords.y, toCoords.x, toCoords.y);
-
+          {connectionPaths.map(({ conn, isFilterFalse, dStr }, idx) => {
             return (
               <g key={idx} className="group pointer-events-auto">
                 {/* Visual glow backdrop for wires */}
@@ -562,3 +575,5 @@ export default function FlowCanvas({
     </div>
   );
 }
+
+export default React.memo(FlowCanvas);

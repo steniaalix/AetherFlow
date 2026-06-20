@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
-import { Workflow, ExecutionLog, UserSession } from "../types";
+import { Workflow, ExecutionLog, UserSession, ActivityLog } from "../types";
 
 // Helper keys for LocalStorage override settings
 const STORAGE_KEYS = {
@@ -7,6 +7,7 @@ const STORAGE_KEYS = {
   KEY: "auraflow_supabase_key",
   LOCAL_WF: "auraflow_workflows",
   LOCAL_LOGS: "auraflow_logs",
+  LOCAL_ACTIVITY_LOGS: "auraflow_activity_logs",
   USER: "auraflow_user",
 };
 
@@ -49,12 +50,37 @@ if (config.isConfigured) {
   }
 }
 
+function toUserSession(user: any): UserSession {
+  return {
+    email: user?.email || null,
+    id: user?.id || null,
+    isAuthenticated: !!user?.id,
+  };
+}
+
+async function requireAuthenticatedUser() {
+  if (!supabaseClient) {
+    throw new Error("Supabase client is not configured.");
+  }
+
+  const { data, error } = await supabaseClient.auth.getUser();
+  if (error) {
+    throw error;
+  }
+  if (!data.user?.id) {
+    throw new Error("You must sign in before saving to Supabase.");
+  }
+  return data.user;
+}
+
 // SQL Schema code to display in UI for helpful documentation
 export const SUPABASE_SQL_SCHEMA = `-- AuraFlow Workflow Automation Database Schema
 -- Run this in your Supabase SQL Editor to provision tables!
 
+grant usage on schema public to anon, authenticated;
+
 -- Create profiles table (integrated with Supabase Auth)
-create table public.profiles (
+create table if not exists public.profiles (
   id uuid references auth.users on delete cascade primary key,
   email text,
   updated_at timestamp with time zone default timezone('utc'::text, now()) not null
@@ -63,14 +89,48 @@ create table public.profiles (
 -- Enable row level security (RLS)
 alter table public.profiles enable row level security;
 
+grant select, insert, update on public.profiles to authenticated;
+
+drop policy if exists "Users can view own profile" on public.profiles;
 create policy "Users can view own profile" on public.profiles
   for select using (auth.uid() = id);
 
+drop policy if exists "Users can insert own profile" on public.profiles;
+create policy "Users can insert own profile" on public.profiles
+  for insert with check (auth.uid() = id);
+
+drop policy if exists "Users can update own profile" on public.profiles;
 create policy "Users can update own profile" on public.profiles
   for update using (auth.uid() = id);
 
+-- Automatically create a profile row whenever Supabase Auth creates a user.
+-- Passwords are not stored here. Supabase Auth stores and verifies them securely.
+create schema if not exists private;
+
+create or replace function private.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  insert into public.profiles (id, email)
+  values (new.id, new.email)
+  on conflict (id) do update
+    set email = excluded.email,
+        updated_at = timezone('utc'::text, now());
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute procedure private.handle_new_user();
+
 -- Create workflows table
-create table public.workflows (
+create table if not exists public.workflows (
   id uuid default gen_random_uuid() primary key,
   user_id uuid references auth.users on delete cascade,
   name text not null,
@@ -84,14 +144,30 @@ create table public.workflows (
 
 alter table public.workflows enable row level security;
 
-create policy "Users can manage own workflows" on public.workflows
-  for all using (auth.uid() = user_id);
+grant select, insert, update, delete on public.workflows to authenticated;
+
+drop policy if exists "Users can view own workflows" on public.workflows;
+create policy "Users can view own workflows" on public.workflows
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "Users can insert own workflows" on public.workflows;
+create policy "Users can insert own workflows" on public.workflows
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "Users can update own workflows" on public.workflows;
+create policy "Users can update own workflows" on public.workflows
+  for update using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+drop policy if exists "Users can delete own workflows" on public.workflows;
+create policy "Users can delete own workflows" on public.workflows
+  for delete using (auth.uid() = user_id);
 
 -- Create execution logs table
-create table public.execution_logs (
+create table if not exists public.execution_logs (
   id uuid default gen_random_uuid() primary key,
   user_id uuid references auth.users on delete cascade,
-  workflow_id uuid not null,
+  workflow_id text not null,
   workflow_name text not null,
   started_at timestamp with time zone default timezone('utc'::text, now()) not null,
   ended_at timestamp with time zone default timezone('utc'::text, now()) not null,
@@ -101,10 +177,36 @@ create table public.execution_logs (
 
 alter table public.execution_logs enable row level security;
 
+grant select, insert on public.execution_logs to authenticated;
+
+drop policy if exists "Users can view own execution logs" on public.execution_logs;
 create policy "Users can view own execution logs" on public.execution_logs
   for select using (auth.uid() = user_id);
 
+drop policy if exists "Users can insert own execution logs" on public.execution_logs;
 create policy "Users can insert own execution logs" on public.execution_logs
+  for insert with check (auth.uid() = user_id);
+
+-- Create user activity logs table
+create table if not exists public.activity_logs (
+  id uuid default gen_random_uuid() primary key,
+  user_id uuid references auth.users on delete cascade,
+  action text not null,
+  message text not null,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+alter table public.activity_logs enable row level security;
+
+grant select, insert on public.activity_logs to authenticated;
+
+drop policy if exists "Users can view own activity logs" on public.activity_logs;
+create policy "Users can view own activity logs" on public.activity_logs
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "Users can insert own activity logs" on public.activity_logs;
+create policy "Users can insert own activity logs" on public.activity_logs
   for insert with check (auth.uid() = user_id);
 `;
 
@@ -238,13 +340,108 @@ export const AuraDatabase = {
     }
   },
 
+  async diagnoseCloudWrites(): Promise<{ success: boolean; msg: string }> {
+    const config = getSupabaseConfig();
+    if (!supabaseClient || !config.isConfigured) {
+      return { success: false, msg: "Supabase is not configured in this browser session." };
+    }
+
+    try {
+      const user = await requireAuthenticatedUser();
+      const stamp = new Date().toISOString();
+
+      const activityResult = await supabaseClient
+        .from("activity_logs")
+        .insert([{
+          user_id: user.id,
+          action: "diagnostic.write_test",
+          message: "Supabase write diagnostic.",
+          metadata: { source: "SupabaseConfigModal", stamp },
+        }])
+        .select("id")
+        .single();
+      if (activityResult.error) {
+        return { success: false, msg: `activity_logs write failed: ${activityResult.error.message}` };
+      }
+
+      const workflowResult = await supabaseClient
+        .from("workflows")
+        .insert([{
+          user_id: user.id,
+          name: "Diagnostic Write Test",
+          description: "Temporary workflow created by the Supabase connection diagnostic.",
+          nodes: [],
+          connections: [],
+          is_active: false,
+        }])
+        .select("id")
+        .single();
+      if (workflowResult.error) {
+        return { success: false, msg: `workflows write failed: ${workflowResult.error.message}` };
+      }
+
+      const executionResult = await supabaseClient
+        .from("execution_logs")
+        .insert([{
+          user_id: user.id,
+          workflow_id: workflowResult.data.id,
+          workflow_name: "Diagnostic Write Test",
+          started_at: stamp,
+          ended_at: stamp,
+          status: "success",
+          steps: [],
+        }])
+        .select("id")
+        .single();
+      if (executionResult.error) {
+        return { success: false, msg: `execution_logs write failed: ${executionResult.error.message}` };
+      }
+
+      const deleteResult = await supabaseClient
+        .from("workflows")
+        .delete()
+        .eq("id", workflowResult.data.id);
+      if (deleteResult.error) {
+        return { success: false, msg: `writes worked, but workflow cleanup failed: ${deleteResult.error.message}` };
+      }
+
+      return { success: true, msg: "Cloud write diagnostic passed for activity_logs, workflows, and execution_logs." };
+    } catch (err: any) {
+      const message = err?.message || String(err);
+      if (message.toLowerCase().includes("auth session missing")) {
+        return {
+          success: false,
+          msg: "Supabase is connected, but you are not signed in inside AetherFlow. Close this modal, sign in with your AetherFlow account, then run Test DB again.",
+        };
+      }
+      return { success: false, msg: message };
+    }
+  },
+
   // --- Authentication Handlers ---
   async signUp(email: string, pass: string): Promise<{ success: boolean; user?: any; error?: string }> {
     const config = getSupabaseConfig();
     if (supabaseClient && config.isConfigured) {
       const { data, error } = await supabaseClient.auth.signUp({ email, password: pass });
       if (error) return { success: false, error: error.message };
-      return { success: true, user: data.user };
+      if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+        return {
+          success: false,
+          error: "An account with this email already exists. Sign in with the original password, or reset the password from Supabase/Auth.",
+        };
+      }
+      if (!data.session) {
+        return {
+          success: true,
+          user: {
+            email: data.user?.email || email,
+            id: data.user?.id || null,
+            isAuthenticated: false,
+            needsEmailConfirmation: true,
+          },
+        };
+      }
+      return { success: true, user: toUserSession(data.user) };
     } else {
       // Local Auth Simulate
       const session: UserSession = { email, id: "local-user-id", isAuthenticated: true };
@@ -257,8 +454,13 @@ export const AuraDatabase = {
     const config = getSupabaseConfig();
     if (supabaseClient && config.isConfigured) {
       const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password: pass });
-      if (error) return { success: false, error: error.message };
-      return { success: true, user: data.user };
+      if (error) {
+        const message = error.message.toLowerCase().includes("invalid login credentials")
+          ? "Invalid login credentials. If you just registered, confirm your email first or turn off email confirmations in Supabase Auth settings for local testing."
+          : error.message;
+        return { success: false, error: message };
+      }
+      return { success: true, user: toUserSession(data.user) };
     } else {
       // Local Auth Simulate
       const session: UserSession = { email, id: "local-user-id", isAuthenticated: true };
@@ -345,7 +547,7 @@ export const AuraDatabase = {
 
     if (supabaseClient && config.isConfigured) {
       try {
-        const user = (await supabaseClient.auth.getUser()).data.user;
+        const user = await requireAuthenticatedUser();
         const payload = {
           name: wf.name,
           description: wf.description,
@@ -390,7 +592,8 @@ export const AuraDatabase = {
           updatedAt: resultData.updated_at,
         };
       } catch (err) {
-        console.warn("Retrying workflow save locally because cloud DB schema is pending or write failed:", err);
+        console.error("Supabase workflow save failed:", err);
+        throw err;
       }
     }
 
@@ -419,10 +622,13 @@ export const AuraDatabase = {
     const config = getSupabaseConfig();
     if (supabaseClient && config.isConfigured) {
       try {
+        await requireAuthenticatedUser();
         const { error } = await supabaseClient.from("workflows").delete().eq("id", id);
         if (!error) return true;
+        throw error;
       } catch (err) {
-        console.warn("Proceeding to delete local clone since remote db threw:", err);
+        console.error("Supabase workflow delete failed:", err);
+        throw err;
       }
     }
 
@@ -430,6 +636,87 @@ export const AuraDatabase = {
     const filtered = workflows.filter((w) => w.id !== id);
     localStorage.setItem(STORAGE_KEYS.LOCAL_WF, JSON.stringify(filtered));
     return true;
+  },
+
+  // --- User Activity Log Handlers ---
+  async getActivityLogs(): Promise<ActivityLog[]> {
+    const config = getSupabaseConfig();
+    if (supabaseClient && config.isConfigured) {
+      try {
+        const { data, error } = await supabaseClient
+          .from("activity_logs")
+          .select("*")
+          .order("created_at", { ascending: false });
+        if (error) throw error;
+        return data.map((item: any) => ({
+          id: item.id,
+          action: item.action,
+          message: item.message,
+          metadata: item.metadata,
+          createdAt: item.created_at,
+        }));
+      } catch (err) {
+        console.warn("Falling back to local activity logs because Supabase activity read failed:", err);
+      }
+    }
+
+    const saved = localStorage.getItem(STORAGE_KEYS.LOCAL_ACTIVITY_LOGS);
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  },
+
+  async saveActivityLog(action: string, message: string, metadata: Record<string, any> = {}): Promise<ActivityLog> {
+    const createdAt = new Date().toISOString();
+    const config = getSupabaseConfig();
+
+    if (supabaseClient && config.isConfigured) {
+      try {
+        const user = await requireAuthenticatedUser();
+        const { data, error } = await supabaseClient
+          .from("activity_logs")
+          .insert([{
+            user_id: user.id,
+            action,
+            message,
+            metadata,
+            created_at: createdAt,
+          }])
+          .select()
+          .single();
+        if (error) throw error;
+        return {
+          id: data.id,
+          action: data.action,
+          message: data.message,
+          metadata: data.metadata,
+          createdAt: data.created_at,
+        };
+      } catch (err) {
+        console.error("Supabase activity log insert failed:", err);
+        throw err;
+      }
+    }
+
+    const logs = await this.getActivityLogs();
+    const localLog: ActivityLog = {
+      id: "activity_" + Math.random().toString(36).substring(2, 9),
+      action,
+      message,
+      metadata,
+      createdAt,
+    };
+    logs.unshift(localLog);
+    if (logs.length > 50) {
+      logs.length = 50;
+    }
+    localStorage.setItem(STORAGE_KEYS.LOCAL_ACTIVITY_LOGS, JSON.stringify(logs));
+    return localLog;
   },
 
   // --- Execution Logs Handlers ---
@@ -471,7 +758,7 @@ export const AuraDatabase = {
     const config = getSupabaseConfig();
     if (supabaseClient && config.isConfigured) {
       try {
-        const user = (await supabaseClient.auth.getUser()).data.user;
+        const user = await requireAuthenticatedUser();
         const payload = {
           workflow_id: log.workflowId,
           workflow_name: log.workflowName,
@@ -497,8 +784,9 @@ export const AuraDatabase = {
           status: data.status,
           steps: data.steps,
         };
-      } catch {
-        // Fallback
+      } catch (err) {
+        console.error("Supabase execution log insert failed:", err);
+        throw err;
       }
     }
 

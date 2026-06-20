@@ -5,7 +5,6 @@ import FlowCanvas from "./components/FlowCanvas";
 import NodeConfigPanel from "./components/NodeConfigPanel";
 import AIPromptBuilder from "./components/AIPromptBuilder";
 import ExecutionLogViewer from "./components/ExecutionLogViewer";
-import SupabaseConfigModal from "./components/SupabaseConfigModal";
 import ConsoleOutputPanel from "./components/ConsoleOutputPanel";
 
 import {
@@ -14,7 +13,6 @@ import {
   Save,
   Plus,
   Trash2,
-  Database,
   Terminal,
   Activity,
   User,
@@ -40,10 +38,6 @@ export default function App() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [loadingAuth, setLoadingAuth] = useState(false);
   const [showAuthTab, setShowAuthTab] = useState<"signin" | "signup">("signin");
-
-  // Database Configurations
-  const [showConfig, setShowConfig] = useState(false);
-  const dbConfig = AuraDatabase.getConfig();
 
   // Workflows states
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
@@ -142,6 +136,12 @@ export default function App() {
     setTimeout(() => setStatusBanner(null), 4000);
   };
 
+  const recordActivity = (action: string, message: string, metadata: Record<string, any> = {}) => {
+    void AuraDatabase.saveActivityLog(action, message, metadata).catch((err: any) => {
+      console.warn("Activity log was not saved:", err);
+    });
+  };
+
   // 2. Authentication handlers
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -161,8 +161,21 @@ export default function App() {
       }
 
       if (res.success) {
-        showBanner("success", `Successfully authorized as ${authEmail}`);
-        setSession({ email: authEmail, id: "active-user-account", isAuthenticated: true });
+        const nextSession = res.user || { email: authEmail, id: null, isAuthenticated: true };
+        if (nextSession.isAuthenticated) {
+          showBanner("success", `Successfully authorized as ${nextSession.email || authEmail}`);
+          setSession(nextSession);
+          recordActivity(
+            showAuthTab === "signup" ? "auth.signup" : "auth.signin",
+            showAuthTab === "signup" ? "User created an account." : "User signed in.",
+            { email: nextSession.email }
+          );
+        } else if (nextSession.needsEmailConfirmation) {
+          showBanner("success", "Account created. Confirm your email before signing in.");
+          setShowAuthTab("signin");
+        } else {
+          setAuthError("Account created, but no active session was returned. Try signing in again.");
+        }
         // Clear params
         setAuthEmail("");
         setAuthPass("");
@@ -177,6 +190,7 @@ export default function App() {
   };
 
   const handleSignOut = async () => {
+    recordActivity("auth.signout", "User signed out.", { email: session.email });
     await AuraDatabase.signOut();
     setSession({ email: null, id: null, isAuthenticated: false });
     setActiveWorkflow(null);
@@ -190,6 +204,21 @@ export default function App() {
       setActiveWorkflow(found);
       setSelectedNodeId(null);
     }
+  };
+
+  const handleRenameActiveWorkflow = (name: string) => {
+    if (!activeWorkflow) return;
+
+    const nextWorkflow = {
+      ...activeWorkflow,
+      name,
+      updatedAt: new Date().toISOString(),
+    };
+
+    setActiveWorkflow(nextWorkflow);
+    setWorkflows((current) =>
+      current.map((workflow) => (workflow.id === nextWorkflow.id ? nextWorkflow : workflow))
+    );
   };
 
   const handleCreateNewWorkflow = () => {
@@ -215,6 +244,10 @@ export default function App() {
     setWorkflows([newWf, ...workflows]);
     setActiveWorkflow(newWf);
     setSelectedNodeId(null);
+    recordActivity("workflow.create", `Created workflow "${newWf.name}".`, {
+      workflowId: newWf.id,
+      workflowName: newWf.name,
+    });
     showBanner("success", "Spawned an empty design automation canvas.");
   };
 
@@ -226,6 +259,10 @@ export default function App() {
       const filtered = workflows.filter((w) => w.id !== activeWorkflow.id);
       setWorkflows([saved, ...filtered]);
       setActiveWorkflow(saved);
+      recordActivity("workflow.save", `Saved workflow "${saved.name}".`, {
+        workflowId: saved.id,
+        workflowName: saved.name,
+      });
       showBanner("success", `Pipeline "${saved.name}" stored to database.`);
     } catch (err: any) {
       showBanner("error", `Failed to save workflow state: ${err.message || err}`);
@@ -235,6 +272,7 @@ export default function App() {
   const handleDeleteWorkflow = async () => {
     if (!activeWorkflow) return;
     if (confirm(`Are you sure you want to delete "${activeWorkflow.name}"?`)) {
+      const deletedWorkflow = activeWorkflow;
       await AuraDatabase.deleteWorkflow(activeWorkflow.id);
       const filtered = workflows.filter((w) => w.id !== activeWorkflow.id);
       setWorkflows(filtered);
@@ -244,6 +282,10 @@ export default function App() {
         setActiveWorkflow(null);
       }
       setSelectedNodeId(null);
+      recordActivity("workflow.delete", `Deleted workflow "${deletedWorkflow.name}".`, {
+        workflowId: deletedWorkflow.id,
+        workflowName: deletedWorkflow.name,
+      });
       showBanner("success", "Removed workflow file from database registry.");
     }
   };
@@ -464,6 +506,17 @@ export default function App() {
       setLogs((prev) => [finalizedLog, ...prev]);
       setActiveLog(null);
       setCompletedLogModal(finalizedLog); // Auto trigger completed execution modal popup!
+      recordActivity(
+        "workflow.execute",
+        `Executed workflow "${finalizedLog.workflowName}" with status ${simulationLog.status}.`,
+        {
+          executionLogId: finalizedLog.id,
+          workflowId: finalizedLog.workflowId,
+          workflowName: finalizedLog.workflowName,
+          status: finalizedLog.status,
+          stepCount: finalizedLog.steps.length,
+        }
+      );
       showBanner(
         simulationLog.status === "success" ? "success" : "error",
         `Execution simulation complete. Status: ${simulationLog.status.toUpperCase()}`
@@ -497,7 +550,6 @@ export default function App() {
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-sm font-bold tracking-tight text-white">AetherFlow Studio</h1>
-              <span className="px-2 py-0.5 bg-cyan-500/20 text-cyan-400 border border-cyan-500/10 rounded text-[9px] font-bold uppercase tracking-wider">Active</span>
             </div>
             <p className="text-[10px] text-slate-400">Low-code workflow automation orchestrator & API router</p>
           </div>
@@ -518,17 +570,6 @@ export default function App() {
               {statusBanner.text}
             </div>
           )}
-
-          {/* Database mode descriptor button */}
-          <button
-            onClick={() => setShowConfig(true)}
-            className="px-3 py-1.5 bg-white/5 hover:bg-white/10 hover:border-white/20 border border-white/10 rounded-lg text-[10px] font-semibold text-slate-300 flex items-center gap-2 cursor-pointer transition-all duration-205 backdrop-blur-md"
-          >
-            <Database className="w-3.5 h-3.5 text-cyan-400" />
-            <span>
-              {dbConfig.isConfigured ? "🔌 Supabase Cloud Active" : "💾 Local Storage Mode"}
-            </span>
-          </button>
 
           {/* User profiles Auth Controller */}
           {session.isAuthenticated ? (
@@ -603,6 +644,20 @@ export default function App() {
                     </option>
                   ))}
                 </select>
+                {activeWorkflow && (
+                  <div className="space-y-1.5 pt-2">
+                    <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                      Pipeline name
+                    </label>
+                    <input
+                      type="text"
+                      value={activeWorkflow.name}
+                      onChange={(e) => handleRenameActiveWorkflow(e.target.value)}
+                      placeholder="Name this pipeline"
+                      className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-xs font-semibold text-slate-100 outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-500/20 backdrop-blur-md"
+                    />
+                  </div>
+                )}
                 {activeWorkflow && (
                   <p className="text-[10px] text-slate-400 pt-1.5 leading-normal">
                     {activeWorkflow.description || "No description configured."}
@@ -780,9 +835,6 @@ export default function App() {
           )}
         </div>
       </main>
-
-      {/* 3. SUPABASE SECURE DATABASE PREPARATION MODAL PANEL */}
-      <SupabaseConfigModal isOpen={showConfig} onClose={() => setShowConfig(false)} />
 
       {/* 4. HIGH FIDELITY PIPELINE SIMULATION COMPLETION INSPECTOR OVERLAY */}
       {completedLogModal && (

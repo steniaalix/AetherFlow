@@ -19,6 +19,8 @@ const AVAILABLE_NODE_PRESETS: Array<{ type: NodeType; label: string; desc: strin
   { type: "schedule", label: "Schedule Interval", desc: "Hourly, daily or weekly schedule trigger", category: "trigger" },
   { type: "prompt", label: "Manual Prompt Trigger", desc: "Injects seed parameters on click", category: "trigger" },
   { type: "click", label: "Manual Click Trigger", desc: "Launches run directly when clicked from the node card", category: "trigger" },
+  { type: "telegram", label: "Telegram Bot Trigger", desc: "Starts from Telegram bot messages", category: "trigger" },
+  { type: "whatsapp", label: "WhatsApp Cloud Trigger", desc: "Starts from WhatsApp message webhooks", category: "trigger" },
   { type: "gemini", label: "Gemini Generative AI", desc: "Drafts summaries from prompt templates", category: "ai" },
   { type: "summarize", label: "AI Summarizer", desc: "Condenses bulk inputs gracefully", category: "ai" },
   { type: "filter", label: "Logic Filter", desc: "Branching IF/ELSE conditional router", category: "logic" },
@@ -252,6 +254,17 @@ function FlowCanvas({
       configSeed.url = "api.open-meteo.com/v1/forecast?latitude=37.77&longitude=-122.41&current_weather=true";
       configSeed.method = "GET";
     }
+    if (presetType === "telegram") {
+      configSeed.botUsername = "@aetherflow_bot";
+      configSeed.webhookPath = "/api/telegram/webhook";
+      configSeed.sampleMessage = "Start the workflow";
+    }
+    if (presetType === "whatsapp") {
+      configSeed.phoneNumberId = "demo-phone-number-id";
+      configSeed.webhookPath = "/api/whatsapp/webhook";
+      configSeed.sampleFrom = "+15551234567";
+      configSeed.sampleMessage = "Start the workflow";
+    }
 
     const newNode: WorkflowNode = {
       id: "node_" + Math.random().toString(36).substring(2, 6),
@@ -364,7 +377,13 @@ function FlowCanvas({
             
             // Get node coloring categories
             const isAI = node.type === "gemini" || node.type === "summarize";
-            const isTrigger = node.type === "webhook" || node.type === "schedule" || node.type === "prompt" || node.type === "click";
+            const isTrigger =
+              node.type === "webhook" ||
+              node.type === "schedule" ||
+              node.type === "prompt" ||
+              node.type === "click" ||
+              node.type === "telegram" ||
+              node.type === "whatsapp";
             const isFilter = node.type === "filter";
 
             let outlineColor = "border-white/10";
@@ -454,6 +473,16 @@ function FlowCanvas({
                   {node.type === "schedule" && (
                     <div className="text-[9px] text-emerald-400 font-mono bg-emerald-500/5 px-2 py-0.5 border border-emerald-500/10 rounded">
                       Time: {node.config.time || "08:00 AM"} ({node.config.interval})
+                    </div>
+                  )}
+                  {node.type === "telegram" && (
+                    <div className="text-[9px] text-emerald-400 font-mono bg-emerald-500/5 px-2 py-0.5 border border-emerald-500/10 rounded truncate">
+                      Bot: {node.config.botUsername || "@aetherflow_bot"}
+                    </div>
+                  )}
+                  {node.type === "whatsapp" && (
+                    <div className="text-[9px] text-emerald-400 font-mono bg-emerald-500/5 px-2 py-0.5 border border-emerald-500/10 rounded truncate">
+                      Phone ID: {node.config.phoneNumberId || "demo-phone-number-id"}
                     </div>
                   )}
                   {node.type === "gemini" && (

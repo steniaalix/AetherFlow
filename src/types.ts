@@ -8,6 +8,8 @@ export type NodeType =
   | 'schedule'
   | 'prompt'
   | 'click'
+  | 'telegram'
+  | 'whatsapp'
   | 'gemini'
   | 'summarize'
   | 'filter'
@@ -72,8 +74,11 @@ export interface SupabaseConfig {
   useLocalFallback: boolean;
 }
 
+export type AccountRole = 'worker' | 'customer';
+
 export interface UserSession {
   email: string | null;
   id: string | null;
   isAuthenticated: boolean;
+  accountRole: AccountRole;
 }

@@ -117,6 +117,8 @@ Available Node Types:
 - webhook (Trigger: Receives data, config: { webhookPath: string })
 - schedule (Trigger: Periodical execution, config: { interval: "hourly" | "daily" | "weekly", time: string })
 - prompt (Trigger: Custom manual input, config: { defaultInput: string })
+- telegram (Trigger: Telegram bot message webhook, config: { botUsername: string, webhookPath: string, sampleMessage: string })
+- whatsapp (Trigger: WhatsApp Cloud API message webhook, config: { phoneNumberId: string, webhookPath: string, sampleFrom: string, sampleMessage: string })
 - gemini (AI Step: Large content generation, config: { promptTemplate: string, temperature: number })
 - summarize (AI Step: Compresses content, config: { maxLength: number })
 - filter (Logic Step: If/Else conditional checking, config: { field: string, operator: "equals" | "contains" | "gt" | "lt", value: string })
@@ -153,7 +155,7 @@ Available Node Types:
                   },
                   type: {
                     type: Type.STRING,
-                    description: "One of the available node types: webhook, schedule, prompt, gemini, summarize, filter, email, slack, github, discord, http"
+                    description: "One of the available node types: webhook, schedule, prompt, telegram, whatsapp, gemini, summarize, filter, email, slack, github, discord, http"
                   },
                   name: {
                     type: Type.STRING,
@@ -350,6 +352,29 @@ app.post("/api/node/execute", async (req, res) => {
         mockResultData = parsedPayload;
         sampleLogs = "Manual click event triggered on node canvas card.";
         break;
+      case "telegram":
+        mockResultData = {
+          platform: "telegram",
+          receivedAt: new Date().toISOString(),
+          botUsername: config.botUsername || inputPayload?.botUsername || "@aetherflow_bot",
+          chatId: inputPayload?.chatId || inputPayload?.message?.chat?.id || "demo-telegram-chat",
+          from: inputPayload?.from || inputPayload?.message?.from?.username || "telegram-user",
+          message: inputPayload?.message?.text || inputPayload?.message || config.sampleMessage || "Start the workflow",
+          payload: inputPayload || null
+        };
+        sampleLogs = `Telegram bot webhook accepted a message from ${mockResultData.from}.`;
+        break;
+      case "whatsapp":
+        mockResultData = {
+          platform: "whatsapp",
+          receivedAt: new Date().toISOString(),
+          phoneNumberId: config.phoneNumberId || inputPayload?.phoneNumberId || "demo-phone-number-id",
+          from: inputPayload?.from || inputPayload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from || config.sampleFrom || "+15551234567",
+          message: inputPayload?.message || inputPayload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.text?.body || config.sampleMessage || "Start the workflow",
+          payload: inputPayload || null
+        };
+        sampleLogs = `WhatsApp Cloud webhook accepted an inbound message from ${mockResultData.from}.`;
+        break;
       case "email":
         mockResultData = {
           sentTo: config.to || "recipient@example.com",
@@ -427,11 +452,60 @@ app.post("/api/node/execute", async (req, res) => {
   }
 });
 
+app.get("/api/telegram/webhook", (_req, res) => {
+  res.json({
+    status: "ready",
+    platform: "telegram",
+    endpoint: "/api/telegram/webhook",
+    note: "Use POST for Telegram webhook payloads. Public HTTPS hosting is required for live Telegram webhooks."
+  });
+});
+
+app.post("/api/telegram/webhook", (req, res) => {
+  res.json({
+    status: "received",
+    platform: "telegram",
+    receivedAt: new Date().toISOString(),
+    payload: req.body
+  });
+});
+
+app.get("/api/whatsapp/webhook", (req, res) => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+  const expectedToken = process.env.WHATSAPP_VERIFY_TOKEN || "aetherflow-demo";
+
+  if (mode === "subscribe" && token === expectedToken && typeof challenge === "string") {
+    res.status(200).send(challenge);
+    return;
+  }
+
+  res.status(403).json({
+    status: "verification_failed",
+    platform: "whatsapp",
+    endpoint: "/api/whatsapp/webhook",
+    note: "Set WHATSAPP_VERIFY_TOKEN in the server environment for Meta webhook verification."
+  });
+});
+
+app.post("/api/whatsapp/webhook", (req, res) => {
+  res.json({
+    status: "received",
+    platform: "whatsapp",
+    receivedAt: new Date().toISOString(),
+    payload: req.body
+  });
+});
+
 // Setup Vite Dev Server / Static Asset Router Middleware
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        allowedHosts: true,
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);

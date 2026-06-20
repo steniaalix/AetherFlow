@@ -47,6 +47,9 @@ export default function ExecutionLogViewer({ logs, onClearLogs, activeLog, isRun
       case "webhook":
       case "schedule":
       case "prompt":
+      case "click":
+      case "telegram":
+      case "whatsapp":
         return "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
       case "gemini":
       case "summarize":

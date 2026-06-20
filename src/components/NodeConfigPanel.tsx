@@ -122,6 +122,94 @@ export default function NodeConfigPanel({ node, onUpdate, onDelete, onClose, las
           </div>
         );
 
+      case "telegram":
+        return (
+          <div className="space-y-4">
+            <div className="p-3 bg-emerald-950/20 border border-emerald-500/15 rounded-lg text-[10px] text-emerald-300 leading-normal space-y-1">
+              <span className="font-bold">Telegram Bot Trigger</span>
+              <p>Use this as a Telegram webhook entry point. Bot tokens stay on the server or platform settings, not inside customer workflow cards.</p>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Bot Username</label>
+              <input
+                type="text"
+                value={config.botUsername || ""}
+                onChange={(e) => handleFieldChange("botUsername", e.target.value)}
+                placeholder="@aetherflow_bot"
+                className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-xs text-slate-200 outline-none focus:border-cyan-400 backdrop-blur-md"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Webhook Path</label>
+              <input
+                type="text"
+                value={config.webhookPath || "/api/telegram/webhook"}
+                onChange={(e) => handleFieldChange("webhookPath", e.target.value)}
+                placeholder="/api/telegram/webhook"
+                className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-xs text-slate-200 outline-none focus:border-cyan-400 font-mono backdrop-blur-md"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Sample Incoming Message</label>
+              <textarea
+                value={config.sampleMessage || ""}
+                onChange={(e) => handleFieldChange("sampleMessage", e.target.value)}
+                placeholder="Start the workflow"
+                className="w-full h-20 px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-xs text-slate-200 outline-none focus:border-cyan-400 resize-none leading-relaxed backdrop-blur-md"
+              />
+            </div>
+          </div>
+        );
+
+      case "whatsapp":
+        return (
+          <div className="space-y-4">
+            <div className="p-3 bg-emerald-950/20 border border-emerald-500/15 rounded-lg text-[10px] text-emerald-300 leading-normal space-y-1">
+              <span className="font-bold">WhatsApp Cloud Trigger</span>
+              <p>Use this as a WhatsApp Cloud API webhook entry point. Access tokens and verify tokens belong in server environment settings.</p>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Phone Number ID</label>
+              <input
+                type="text"
+                value={config.phoneNumberId || ""}
+                onChange={(e) => handleFieldChange("phoneNumberId", e.target.value)}
+                placeholder="demo-phone-number-id"
+                className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-xs text-slate-200 outline-none focus:border-cyan-400 backdrop-blur-md"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Webhook Path</label>
+              <input
+                type="text"
+                value={config.webhookPath || "/api/whatsapp/webhook"}
+                onChange={(e) => handleFieldChange("webhookPath", e.target.value)}
+                placeholder="/api/whatsapp/webhook"
+                className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-xs text-slate-200 outline-none focus:border-cyan-400 font-mono backdrop-blur-md"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Sample Sender</label>
+              <input
+                type="text"
+                value={config.sampleFrom || ""}
+                onChange={(e) => handleFieldChange("sampleFrom", e.target.value)}
+                placeholder="+15551234567"
+                className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-xs text-slate-200 outline-none focus:border-cyan-400 backdrop-blur-md"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Sample Incoming Message</label>
+              <textarea
+                value={config.sampleMessage || ""}
+                onChange={(e) => handleFieldChange("sampleMessage", e.target.value)}
+                placeholder="Start the workflow"
+                className="w-full h-20 px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-xs text-slate-200 outline-none focus:border-cyan-400 resize-none leading-relaxed backdrop-blur-md"
+              />
+            </div>
+          </div>
+        );
+
       case "gemini":
         return (
           <div className="space-y-4">

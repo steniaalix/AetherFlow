@@ -73,7 +73,7 @@ export default function AIPromptBuilder({ onGenerate }: Props) {
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               disabled={loading}
-              placeholder="Describe your automation in plain English (e.g., 'Receive lead details on a webhook, use AI to filter out budgets under $10,000, and alert Discord...')"
+              placeholder="Describe your automation in plain English (e.g., 'When a Telegram or WhatsApp message arrives, use AI to summarize it and alert Discord...')"
               className="w-full h-24 p-3 bg-black/40 hover:bg-black/60 border border-white/10 rounded-lg text-xs leading-relaxed outline-none text-slate-100 placeholder-slate-500 focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400/20 disabled:opacity-60 resize-none transition-all duration-200 backdrop-blur-md"
             />
           </div>

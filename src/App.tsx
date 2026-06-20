@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, lazy, Suspense } from "react";
-import { Workflow, WorkflowNode, WorkflowConnection, ExecutionLog, UserSession } from "./types";
+import { Workflow, WorkflowNode, WorkflowConnection, ExecutionLog, UserSession, AccountRole } from "./types";
 import { AuraDatabase } from "./lib/supabase";
 import FlowCanvas from "./components/FlowCanvas";
 import NodeConfigPanel from "./components/NodeConfigPanel";
@@ -31,17 +31,22 @@ import {
   X,
   Send,
   Loader2,
-  Menu
+  Menu,
+  ShieldCheck,
+  Users
 } from "lucide-react";
+
+const DEFAULT_SESSION: UserSession = { email: null, id: null, isAuthenticated: false, accountRole: "customer" };
 
 export default function App() {
   // Session & Authentication states
-  const [session, setSession] = useState<UserSession>({ email: null, id: null, isAuthenticated: false });
+  const [session, setSession] = useState<UserSession>(DEFAULT_SESSION);
   const [authEmail, setAuthEmail] = useState("");
   const [authPass, setAuthPass] = useState("");
   const [authError, setAuthError] = useState<string | null>(null);
   const [loadingAuth, setLoadingAuth] = useState(false);
   const [showAuthTab, setShowAuthTab] = useState<"signin" | "signup">("signin");
+  const [authRole, setAuthRole] = useState<AccountRole>("worker");
 
   // Database Configurations
   const [showConfig, setShowConfig] = useState(false);
@@ -145,6 +150,14 @@ export default function App() {
     setTimeout(() => setStatusBanner(null), 4000);
   };
 
+  const handleOpenConfig = () => {
+    if (session.isAuthenticated && session.accountRole === "customer") {
+      showBanner("error", "Supabase URLs, anon keys, and secret settings are only available to worker accounts.");
+      return;
+    }
+    setShowConfig(true);
+  };
+
   // 2. Authentication handlers
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -158,14 +171,15 @@ export default function App() {
     try {
       let res;
       if (showAuthTab === "signup") {
-        res = await AuraDatabase.signUp(authEmail, authPass);
+        res = await AuraDatabase.signUp(authEmail, authPass, authRole);
       } else {
-        res = await AuraDatabase.signIn(authEmail, authPass);
+        res = await AuraDatabase.signIn(authEmail, authPass, authRole);
       }
 
       if (res.success) {
-        showBanner("success", `Successfully authorized as ${authEmail}`);
-        setSession({ email: authEmail, id: "active-user-account", isAuthenticated: true });
+        const nextSession = res.session || { email: authEmail, id: "active-user-account", isAuthenticated: true, accountRole: authRole };
+        showBanner("success", `Signed in to ${nextSession.accountRole === "worker" ? "worker" : "customer"} workspace as ${nextSession.email}`);
+        setSession(nextSession);
         // Clear params
         setAuthEmail("");
         setAuthPass("");
@@ -181,7 +195,7 @@ export default function App() {
 
   const handleSignOut = async () => {
     await AuraDatabase.signOut();
-    setSession({ email: null, id: null, isAuthenticated: false });
+    setSession(DEFAULT_SESSION);
     setActiveWorkflow(null);
     showBanner("success", "Logged out. Switched back to public guest profile.");
   };
@@ -364,6 +378,25 @@ export default function App() {
           } catch (e) {
             runContext[tn.id] = { triggerTime: new Date().toISOString(), status: "active", triggerType: "manual_click" };
           }
+        } else if (tn.type === "telegram") {
+          runContext[tn.id] = {
+            triggerTime: new Date().toISOString(),
+            status: "active",
+            platform: "telegram",
+            botUsername: tn.config.botUsername || "@aetherflow_bot",
+            chatId: tn.config.chatId || "demo-telegram-chat",
+            from: tn.config.sampleFrom || "telegram-user",
+            message: tn.config.sampleMessage || "Start the workflow",
+          };
+        } else if (tn.type === "whatsapp") {
+          runContext[tn.id] = {
+            triggerTime: new Date().toISOString(),
+            status: "active",
+            platform: "whatsapp",
+            phoneNumberId: tn.config.phoneNumberId || "demo-phone-number-id",
+            from: tn.config.sampleFrom || "+15551234567",
+            message: tn.config.sampleMessage || "Start the workflow",
+          };
         } else {
           runContext[tn.id] = tn.config.defaultInput || { triggerTime: new Date().toISOString(), status: "active" };
         }
@@ -498,6 +531,7 @@ export default function App() {
     () => activeWorkflow?.nodes.find((n) => n.id === selectedNodeId) || null,
     [activeWorkflow?.nodes, selectedNodeId]
   );
+  const canAccessSecrets = !session.isAuthenticated || session.accountRole === "worker";
 
   return (
     <div className="min-h-screen bg-[#050505] text-slate-200 flex flex-col font-sans select-none antialiased">
@@ -532,15 +566,22 @@ export default function App() {
           )}
 
           {/* Database mode descriptor button */}
-          <button
-            onClick={() => setShowConfig(true)}
-            className="px-3 py-1.5 bg-white/5 hover:bg-white/10 hover:border-white/20 border border-white/10 rounded-lg text-[10px] font-semibold text-slate-300 flex items-center gap-2 cursor-pointer transition-all duration-205 backdrop-blur-md"
-          >
-            <Database className="w-3.5 h-3.5 text-cyan-400" />
-            <span>
-              {dbConfig.isConfigured ? "🔌 Supabase Cloud Active" : "💾 Local Storage Mode"}
-            </span>
-          </button>
+          {canAccessSecrets ? (
+            <button
+              onClick={handleOpenConfig}
+              className="px-3 py-1.5 bg-white/5 hover:bg-white/10 hover:border-white/20 border border-white/10 rounded-lg text-[10px] font-semibold text-slate-300 flex items-center gap-2 cursor-pointer transition-all duration-205 backdrop-blur-md"
+            >
+              <Database className="w-3.5 h-3.5 text-cyan-400" />
+              <span>
+                {dbConfig.isConfigured ? "🔌 Supabase Cloud Active" : "💾 Local Storage Mode"}
+              </span>
+            </button>
+          ) : (
+            <div className="px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-[10px] font-semibold text-emerald-300 flex items-center gap-2 backdrop-blur-md">
+              <Users className="w-3.5 h-3.5" />
+              Customer Workspace
+            </div>
+          )}
 
           {/* User profiles Auth Controller */}
           {session.isAuthenticated ? (
@@ -549,6 +590,13 @@ export default function App() {
                 {session.email?.substring(0, 2) || "U"}
               </div>
               <span className="text-[10px] text-slate-300 max-w-[90px] truncate">{session.email}</span>
+              <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider border ${
+                session.accountRole === "worker"
+                  ? "bg-violet-500/10 text-violet-300 border-violet-500/20"
+                  : "bg-emerald-500/10 text-emerald-300 border-emerald-500/20"
+              }`}>
+                {session.accountRole === "worker" ? "Worker" : "Customer"}
+              </span>
               <button
                 onClick={handleSignOut}
                 title="Sign Out"
@@ -677,6 +725,39 @@ export default function App() {
                 </div>
               </div>
 
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAuthRole("worker")}
+                  className={`p-2 rounded-lg border text-left transition-colors ${
+                    authRole === "worker"
+                      ? "bg-violet-500/15 border-violet-400/40 text-violet-200"
+                      : "bg-black/30 border-white/10 text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider">
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    Worker Login
+                  </div>
+                  <p className="mt-1 text-[9px] leading-normal opacity-75">Owner and developer access.</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAuthRole("customer")}
+                  className={`p-2 rounded-lg border text-left transition-colors ${
+                    authRole === "customer"
+                      ? "bg-emerald-500/15 border-emerald-400/40 text-emerald-200"
+                      : "bg-black/30 border-white/10 text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider">
+                    <Users className="w-3.5 h-3.5" />
+                    Customer Login
+                  </div>
+                  <p className="mt-1 text-[9px] leading-normal opacity-75">Create and use workflows.</p>
+                </button>
+              </div>
+
               <form onSubmit={handleAuthSubmit} className="space-y-3.5">
                 <div className="space-y-1">
                   <input
@@ -708,7 +789,11 @@ export default function App() {
                   disabled={loadingAuth}
                   className="w-full py-2 bg-gradient-to-r from-cyan-400 to-fuchsia-600 hover:opacity-90 text-white text-xs font-bold rounded-lg shadow-md cursor-pointer transition-all disabled:opacity-50"
                 >
-                  {loadingAuth ? "Authorizing..." : showAuthTab === "signup" ? "Create Account & Sync" : "Access Workspace Account"}
+                  {loadingAuth
+                    ? "Authorizing..."
+                    : showAuthTab === "signup"
+                    ? `Create ${authRole === "worker" ? "Worker" : "Customer"} Account`
+                    : `Access ${authRole === "worker" ? "Worker" : "Customer"} Workspace`}
                 </button>
               </form>
             </div>
@@ -821,7 +906,7 @@ export default function App() {
       </main>
 
       {/* 3. SUPABASE SECURE DATABASE PREPARATION MODAL PANEL */}
-      {showConfig && (
+      {showConfig && canAccessSecrets && (
         <Suspense fallback={null}>
           <SupabaseConfigModal isOpen={showConfig} onClose={() => setShowConfig(false)} />
         </Suspense>

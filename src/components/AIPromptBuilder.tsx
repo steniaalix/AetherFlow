@@ -58,11 +58,7 @@ export default function AIPromptBuilder({ onGenerate }: Props) {
       <div className="p-4 bg-black/20 border-b border-white/10 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Sparkles className="w-4 h-4 text-cyan-400" />
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-300">Generate Pipeline with IA Copilot</h3>
-        </div>
-        <div className="flex items-center gap-1">
-          <span className="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-ping"></span>
-          <span className="text-[10px] text-slate-400">Gemini 3.5 Core Engine Ready</span>
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-300">Generate Pipeline with AI Copilot</h3>
         </div>
       </div>
 
@@ -73,8 +69,8 @@ export default function AIPromptBuilder({ onGenerate }: Props) {
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               disabled={loading}
-              placeholder="Describe your automation in plain English (e.g., 'When a Telegram or WhatsApp message arrives, use AI to summarize it and alert Discord...')"
-              className="w-full h-24 p-3 bg-black/40 hover:bg-black/60 border border-white/10 rounded-lg text-xs leading-relaxed outline-none text-slate-100 placeholder-slate-500 focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400/20 disabled:opacity-60 resize-none transition-all duration-200 backdrop-blur-md"
+              placeholder="Describe the workflow you want to build."
+              className="w-full h-12 p-3 bg-black/40 hover:bg-black/60 border border-white/10 rounded-lg text-xs leading-relaxed outline-none text-slate-100 placeholder-slate-500 focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400/20 disabled:opacity-60 resize-none transition-all duration-200 backdrop-blur-md"
             />
           </div>
 
@@ -85,7 +81,7 @@ export default function AIPromptBuilder({ onGenerate }: Props) {
             </div>
           )}
 
-          <div className="flex items-center justify-end gap-4">
+          <div className="flex justify-end">
             <button
               type="submit"
               disabled={loading || !prompt.trim()}

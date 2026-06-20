@@ -67,6 +67,14 @@ export interface ExecutionLog {
   }>;
 }
 
+export interface ActivityLog {
+  id: string;
+  action: string;
+  message: string;
+  metadata?: Record<string, any>;
+  createdAt: string;
+}
+
 export interface SupabaseConfig {
   supabaseUrl: string;
   supabaseAnonKey: string;

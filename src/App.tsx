@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback, lazy, Suspense } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { Workflow, WorkflowNode, WorkflowConnection, ExecutionLog, UserSession, AccountRole } from "./types";
 import { AuraDatabase } from "./lib/supabase";
 import FlowCanvas from "./components/FlowCanvas";
@@ -7,15 +7,12 @@ import AIPromptBuilder from "./components/AIPromptBuilder";
 import ExecutionLogViewer from "./components/ExecutionLogViewer";
 import ConsoleOutputPanel from "./components/ConsoleOutputPanel";
 
-const SupabaseConfigModal = lazy(() => import("./components/SupabaseConfigModal"));
-
 import {
   Workflow as WorkflowIcon,
   Play,
   Save,
   Plus,
   Trash2,
-  Database,
   Terminal,
   Activity,
   User,
@@ -47,10 +44,6 @@ export default function App() {
   const [loadingAuth, setLoadingAuth] = useState(false);
   const [showAuthTab, setShowAuthTab] = useState<"signin" | "signup">("signin");
   const [authRole, setAuthRole] = useState<AccountRole>("worker");
-
-  // Database Configurations
-  const [showConfig, setShowConfig] = useState(false);
-  const dbConfig = AuraDatabase.getConfig();
 
   // Workflows states
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
@@ -150,12 +143,10 @@ export default function App() {
     setTimeout(() => setStatusBanner(null), 4000);
   };
 
-  const handleOpenConfig = () => {
-    if (session.isAuthenticated && session.accountRole === "customer") {
-      showBanner("error", "Supabase URLs, anon keys, and secret settings are only available to worker accounts.");
-      return;
-    }
-    setShowConfig(true);
+  const recordActivity = (action: string, message: string, metadata: Record<string, any> = {}) => {
+    void AuraDatabase.saveActivityLog(action, message, metadata).catch((err: any) => {
+      console.warn("Activity log was not saved:", err);
+    });
   };
 
   // 2. Authentication handlers
@@ -177,9 +168,22 @@ export default function App() {
       }
 
       if (res.success) {
-        const nextSession = res.session || { email: authEmail, id: "active-user-account", isAuthenticated: true, accountRole: authRole };
-        showBanner("success", `Signed in to ${nextSession.accountRole === "worker" ? "worker" : "customer"} workspace as ${nextSession.email}`);
-        setSession(nextSession);
+        const nextSession = res.session || res.user || { email: authEmail, id: null, isAuthenticated: true, accountRole: authRole };
+        if (nextSession.isAuthenticated) {
+          const resolvedSession = { ...nextSession, accountRole: nextSession.accountRole || authRole };
+          showBanner("success", `Signed in to ${resolvedSession.accountRole === "worker" ? "worker" : "customer"} workspace as ${resolvedSession.email || authEmail}`);
+          setSession(resolvedSession);
+          recordActivity(
+            showAuthTab === "signup" ? "auth.signup" : "auth.signin",
+            showAuthTab === "signup" ? "User created an account." : "User signed in.",
+            { email: resolvedSession.email, accountRole: resolvedSession.accountRole }
+          );
+        } else if (nextSession.needsEmailConfirmation) {
+          showBanner("success", "Account created. Confirm your email before signing in.");
+          setShowAuthTab("signin");
+        } else {
+          setAuthError("Account created, but no active session was returned. Try signing in again.");
+        }
         // Clear params
         setAuthEmail("");
         setAuthPass("");
@@ -194,6 +198,7 @@ export default function App() {
   };
 
   const handleSignOut = async () => {
+    recordActivity("auth.signout", "User signed out.", { email: session.email });
     await AuraDatabase.signOut();
     setSession(DEFAULT_SESSION);
     setActiveWorkflow(null);
@@ -207,6 +212,21 @@ export default function App() {
       setActiveWorkflow(found);
       setSelectedNodeId(null);
     }
+  };
+
+  const handleRenameActiveWorkflow = (name: string) => {
+    if (!activeWorkflow) return;
+
+    const nextWorkflow = {
+      ...activeWorkflow,
+      name,
+      updatedAt: new Date().toISOString(),
+    };
+
+    setActiveWorkflow(nextWorkflow);
+    setWorkflows((current) =>
+      current.map((workflow) => (workflow.id === nextWorkflow.id ? nextWorkflow : workflow))
+    );
   };
 
   const handleCreateNewWorkflow = () => {
@@ -232,6 +252,10 @@ export default function App() {
     setWorkflows((prev) => [newWf, ...prev]);
     setActiveWorkflow(newWf);
     setSelectedNodeId(null);
+    recordActivity("workflow.create", `Created workflow "${newWf.name}".`, {
+      workflowId: newWf.id,
+      workflowName: newWf.name,
+    });
     showBanner("success", "Spawned an empty design automation canvas.");
   };
 
@@ -242,6 +266,10 @@ export default function App() {
       // Update cached lists
       setWorkflows((prev) => [saved, ...prev.filter((w) => w.id !== activeWorkflow.id)]);
       setActiveWorkflow(saved);
+      recordActivity("workflow.save", `Saved workflow "${saved.name}".`, {
+        workflowId: saved.id,
+        workflowName: saved.name,
+      });
       showBanner("success", `Pipeline "${saved.name}" stored to database.`);
     } catch (err: any) {
       showBanner("error", `Failed to save workflow state: ${err.message || err}`);
@@ -251,6 +279,7 @@ export default function App() {
   const handleDeleteWorkflow = async () => {
     if (!activeWorkflow) return;
     if (confirm(`Are you sure you want to delete "${activeWorkflow.name}"?`)) {
+      const deletedWorkflow = activeWorkflow;
       await AuraDatabase.deleteWorkflow(activeWorkflow.id);
       const filtered = workflows.filter((w) => w.id !== activeWorkflow.id);
       setWorkflows(filtered);
@@ -260,6 +289,10 @@ export default function App() {
         setActiveWorkflow(null);
       }
       setSelectedNodeId(null);
+      recordActivity("workflow.delete", `Deleted workflow "${deletedWorkflow.name}".`, {
+        workflowId: deletedWorkflow.id,
+        workflowName: deletedWorkflow.name,
+      });
       showBanner("success", "Removed workflow file from database registry.");
     }
   };
@@ -507,6 +540,17 @@ export default function App() {
       setLogs((prev) => [finalizedLog, ...prev]);
       setActiveLog(null);
       setCompletedLogModal(finalizedLog); // Auto trigger completed execution modal popup!
+      recordActivity(
+        "workflow.execute",
+        `Executed workflow "${finalizedLog.workflowName}" with status ${simulationLog.status}.`,
+        {
+          executionLogId: finalizedLog.id,
+          workflowId: finalizedLog.workflowId,
+          workflowName: finalizedLog.workflowName,
+          status: finalizedLog.status,
+          stepCount: finalizedLog.steps.length,
+        }
+      );
       showBanner(
         simulationLog.status === "success" ? "success" : "error",
         `Execution simulation complete. Status: ${simulationLog.status.toUpperCase()}`
@@ -531,8 +575,6 @@ export default function App() {
     () => activeWorkflow?.nodes.find((n) => n.id === selectedNodeId) || null,
     [activeWorkflow?.nodes, selectedNodeId]
   );
-  const canAccessSecrets = !session.isAuthenticated || session.accountRole === "worker";
-
   return (
     <div className="min-h-screen bg-[#050505] text-slate-200 flex flex-col font-sans select-none antialiased">
       {/* 1. PROFESSIONAL HEADER HERO HUD NAVBAR */}
@@ -562,24 +604,6 @@ export default function App() {
             >
               <span className="w-1.5 h-1.5 rounded-full bg-current animate-ping"></span>
               {statusBanner.text}
-            </div>
-          )}
-
-          {/* Database mode descriptor button */}
-          {canAccessSecrets ? (
-            <button
-              onClick={handleOpenConfig}
-              className="px-3 py-1.5 bg-white/5 hover:bg-white/10 hover:border-white/20 border border-white/10 rounded-lg text-[10px] font-semibold text-slate-300 flex items-center gap-2 cursor-pointer transition-all duration-205 backdrop-blur-md"
-            >
-              <Database className="w-3.5 h-3.5 text-cyan-400" />
-              <span>
-                {dbConfig.isConfigured ? "🔌 Supabase Cloud Active" : "💾 Local Storage Mode"}
-              </span>
-            </button>
-          ) : (
-            <div className="px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-[10px] font-semibold text-emerald-300 flex items-center gap-2 backdrop-blur-md">
-              <Users className="w-3.5 h-3.5" />
-              Customer Workspace
             </div>
           )}
 
@@ -676,6 +700,20 @@ export default function App() {
                     </option>
                   ))}
                 </select>
+                {activeWorkflow && (
+                  <div className="space-y-1.5 pt-2">
+                    <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                      Pipeline name
+                    </label>
+                    <input
+                      type="text"
+                      value={activeWorkflow.name}
+                      onChange={(e) => handleRenameActiveWorkflow(e.target.value)}
+                      placeholder="Name this pipeline"
+                      className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-xs font-semibold text-slate-100 outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-500/20 backdrop-blur-md"
+                    />
+                  </div>
+                )}
                 {activeWorkflow && (
                   <p className="text-[10px] text-slate-400 pt-1.5 leading-normal">
                     {activeWorkflow.description || "No description configured."}
@@ -904,13 +942,6 @@ export default function App() {
           )}
         </div>
       </main>
-
-      {/* 3. SUPABASE SECURE DATABASE PREPARATION MODAL PANEL */}
-      {showConfig && canAccessSecrets && (
-        <Suspense fallback={null}>
-          <SupabaseConfigModal isOpen={showConfig} onClose={() => setShowConfig(false)} />
-        </Suspense>
-      )}
 
       {/* 4. HIGH FIDELITY PIPELINE SIMULATION COMPLETION INSPECTOR OVERLAY */}
       {completedLogModal && (
